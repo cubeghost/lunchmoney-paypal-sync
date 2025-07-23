@@ -1,0 +1,13 @@
+{
+  "name": "lunchmoney-paypal-sync",
+  "version": "1.0.0",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.1.0",
+    "nvp-json": "^1.1.2"
+  }
+}

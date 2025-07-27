@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "main": "index.mjs",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "tsc && node dist/index.mjs"
   },
   "license": "MIT",
   "dependencies": {
     "dotenv": "^17.1.0",
     "nvp-json": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "typescript": "^5.8.3"
   }
 }

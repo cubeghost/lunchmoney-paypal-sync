@@ -1,4 +1,5 @@
-import nvp from 'nvp-json'; 
+import nvp from "nvp-json"; 
+import { subYears } from "date-fns";
 
 const NVP_ENDPOINT = "https://api-3t.paypal.com/nvp";
 
@@ -8,8 +9,6 @@ const NVP_CREDENTIALS = {
   SIGNATURE: process.env.NVP_SIGNATURE!,
   VERSION: '200'
 }
-
-const ONE_YEAR_AGO_MS = 60 * 60 * 24 * 365 * 1000;
 
 const RESPONSE_FIELDS = ["TIMESTAMP", "CORRELATIONID", "ACK", "VERSION", "BUILD"] as const;
 const TRANSACTION_FIELDS = ["L_TIMESTAMP", "L_TIMEZONE", "L_TYPE", "L_EMAIL", "L_NAME", "L_TRANSACTIONID", "L_STATUS", "L_AMT", "L_CURRENCYCODE", "L_FEEAMT", "L_NETAMT"] as const;
@@ -111,11 +110,13 @@ function parseResponse(text: string): NVPTransactionsResponse {
   return data as NVPTransactionsResponse;
 }
 
-export async function getPaypalTransactions() {
+export async function getPaypalTransactions(startDate: Date, endDate: Date) {
   const nvpString = nvp.toNVP({
     ...NVP_CREDENTIALS,
     METHOD: "TransactionSearch",
-    STARTDATE: new Date(Date.now() - ONE_YEAR_AGO_MS).toISOString()
+    TRANSACTIONCLASS: "Sent",
+    STARTDATE: startDate.toISOString(),
+    ENDDATE: endDate.toISOString(),
   });
 
   const response = await fetch(`${NVP_ENDPOINT}?${nvpString}`);

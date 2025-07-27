@@ -1,3 +1,5 @@
+import { formatISO, subYears } from "date-fns";
+
 const API_BASE = "https://dev.lunchmoney.app";
 const ACCESS_TOKEN = process.env.LUNCHMONEY_ACCESS_TOKEN;
 
@@ -26,19 +28,29 @@ export interface Transaction {
   group_id: number | null;
   tags: Tag[];
   external_id: string | null;
+  plaid_metadata: string | null;
   created_at: Date;
   updated_at: Date;
 }
+
+export interface UpdateTransaction extends 
+  Pick<Transaction, "id">, 
+  Partial<Pick<Transaction, "payee" | "notes" | "status" | "category_id">> 
+{
+  tags: string[] | number[] | null;
+}
+
 export interface Tag {
   id: number;
   name: string;
 }
 
-export async function getLunchMoneyTransactions() {
+export async function getLunchMoneyTransactions(startDate: Date, endDate: Date) {
   const options = new URLSearchParams({
     debit_as_negative: "true",
     status: "uncleared",
-    // TODO date stuff
+    start_date: formatISO(startDate, { representation: "date" }),
+    end_date: formatISO(endDate, { representation: "date" }),
   });
   const response = await fetch(`${API_BASE}/v1/transactions?${options.toString()}`, {
     headers: {
@@ -53,7 +65,32 @@ export async function getLunchMoneyTransactions() {
   const text = await response.text();
   const data = JSON.parse(text, jsonDateReviver);
 
+  if (!data.transactions) {
+    console.log(data);
+  }
+
   return data.transactions as Transaction[];
+}
+
+export async function updateLunchMoneyTransaction(transaction: UpdateTransaction) {
+  const response = await fetch(`${API_BASE}/v1/transactions/${transaction.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      debit_as_negative: true,
+      transaction
+    }),
+    headers: {
+      "Authorization": `Bearer ${ACCESS_TOKEN}`,
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const data = await response.json();
+  return data as {updated: boolean};
 }
 
 function jsonDateReviver(_key: string, value: JSONSerializable) {

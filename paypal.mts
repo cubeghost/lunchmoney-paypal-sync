@@ -1,5 +1,4 @@
 import nvp from 'nvp-json'; 
-import type { Override } from './util.mjs';
 
 const NVP_ENDPOINT = "https://api-3t.paypal.com/nvp";
 

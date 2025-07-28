@@ -5,6 +5,7 @@ import {
   addDays,
   closestIndexTo,
   differenceInDays,
+  format,
   formatISO,
   getMonth,
   getYear,
@@ -14,29 +15,24 @@ import {
 import Table from "cli-table3";
 import { confirm } from "@inquirer/prompts";
 
-import { getPaypalTransactions, NVPTransaction } from "./paypal.mjs";
+import {
+  getPaypalTransactions,
+  type NVPTransaction,
+} from "./paypal/listTransactions.mjs";
 import {
   getLunchMoneyTransactions,
-  Transaction,
   updateLunchMoneyTransaction,
+  type Transaction,
 } from "./lunchmoney.mjs";
+import { getDateRange } from "./dates.mjs";
+import { getPaypalTransactionDetails } from "./paypal/transactionDetails.mjs";
 
-const { values } = parseArgs({
-  options: {
-    month: {
-      type: "string",
-    },
-    year: {
-      type: "string",
-    },
-  },
-});
-const today = new Date();
-const month = values.month ? parseInt(values.month) - 1 : getMonth(today);
-const year = values.year ? parseInt(values.year) : getYear(today);
+const { startDate, endDate } = getDateRange();
 
-const startDate = new Date(year, month, 1);
-const endDate = lastDayOfMonth(startDate);
+console.log(
+  "Matching transactions for " +
+    styleText("bold", format(startDate, "LLL yyyy")),
+);
 
 const lunchMoneyTransactions = await getLunchMoneyTransactions(
   startDate,
@@ -44,8 +40,18 @@ const lunchMoneyTransactions = await getLunchMoneyTransactions(
 );
 const paypalTransactions = await getPaypalTransactions(
   subDays(startDate, 7),
-  addDays(endDate, 7)
+  addDays(endDate, 7),
 );
+const intlPaypalTransactions = paypalTransactions.filter(
+  (pp) => pp.L_CURRENCYCODE !== "USD",
+);
+// console.log(intlPaypalTransactions);
+const intlPaypalDetails = await Promise.allSettled(
+  intlPaypalTransactions.map((pp) =>
+    getPaypalTransactionDetails(pp.L_TRANSACTIONID),
+  ),
+);
+console.log(intlPaypalDetails);
 
 const transactions = lunchMoneyTransactions
   .filter(
@@ -69,11 +75,6 @@ for (const pp of paypalTransactions) {
     paypalAmounts.set(amount, [pp]);
   }
 }
-
-console.log(
-  "oldest paypal transaction",
-  paypalTransactions.at(-1)?.L_TIMESTAMP,
-);
 
 const updates = new Map<
   Transaction["id"],
@@ -123,6 +124,8 @@ for (const transaction of transactions) {
     matchDate: closestMatch.L_TIMESTAMP,
   });
 }
+
+// console.log("unmatched paypal transactions", paypalAmounts);
 
 const table = new Table({
   head: ["id", "date", "amount", "update", "payee", "matchDate"],

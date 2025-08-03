@@ -9,6 +9,8 @@ import {
   formatISO,
   getMonth,
   getYear,
+  interval,
+  isWithinInterval,
   lastDayOfMonth,
   subDays,
 } from "date-fns";
@@ -25,7 +27,13 @@ import {
   type Transaction,
 } from "./lunchmoney.mjs";
 import { getDateRange } from "./dates.mjs";
-import { getPaypalTransactionDetails } from "./paypal/transactionDetails.mjs";
+import {
+  exchangeRateCache,
+  getCachedHistoricalExchangeRate,
+  getHistoricalExchangeRate,
+} from "./exchangeRates.mjs";
+
+const DAY_BUFFER = 4;
 
 const { startDate, endDate } = getDateRange();
 
@@ -39,19 +47,9 @@ const lunchMoneyTransactions = await getLunchMoneyTransactions(
   endDate,
 );
 const paypalTransactions = await getPaypalTransactions(
-  subDays(startDate, 7),
-  addDays(endDate, 7),
+  subDays(startDate, DAY_BUFFER),
+  addDays(endDate, DAY_BUFFER),
 );
-const intlPaypalTransactions = paypalTransactions.filter(
-  (pp) => pp.L_CURRENCYCODE !== "USD",
-);
-// console.log(intlPaypalTransactions);
-const intlPaypalDetails = await Promise.allSettled(
-  intlPaypalTransactions.map((pp) =>
-    getPaypalTransactionDetails(pp.L_TRANSACTIONID),
-  ),
-);
-console.log(intlPaypalDetails);
 
 const transactions = lunchMoneyTransactions
   .filter(
@@ -66,7 +64,18 @@ if (transactions.length === 0) {
   process.exit(0);
 }
 
+exchangeRateCache.load();
+const intlPaypalTransactions = paypalTransactions.filter(
+  (pp) => pp.L_CURRENCYCODE !== "USD",
+);
+for (const pp of intlPaypalTransactions) {
+  await getHistoricalExchangeRate(pp.L_TIMESTAMP, pp.L_CURRENCYCODE);
+}
+exchangeRateCache.save();
+
+const paypalMatches = new Set<NVPTransaction["L_TRANSACTIONID"]>();
 const paypalAmounts = new Map<number, NVPTransaction[]>();
+const paypalDates = new Map<string, NVPTransaction[]>();
 for (const pp of paypalTransactions) {
   const amount = parseFloat(pp.L_AMT);
   if (paypalAmounts.has(amount)) {
@@ -74,82 +83,168 @@ for (const pp of paypalTransactions) {
   } else {
     paypalAmounts.set(amount, [pp]);
   }
+
+  const date = formatISO(pp.L_TIMESTAMP, { representation: "date" });
+  if (paypalDates.has(date)) {
+    paypalDates.set(date, [...paypalDates.get(date)!, pp]);
+  } else {
+    paypalDates.set(date, [pp]);
+  }
 }
 
 const updates = new Map<
   Transaction["id"],
   { id: number; payee: string; matchDate: Date }
 >();
+const maybeMatches = new Map<
+  Transaction["id"],
+  { amount: number; paypalTransaction: NVPTransaction }
+>();
 
 for (const transaction of transactions) {
   const date = new Date(transaction.date);
   const amount = parseFloat(transaction.amount);
-  const paypalAmountMatches = paypalAmounts.get(amount);
 
-  if (!paypalAmountMatches || paypalAmountMatches.length === 0) {
-    console.warn("No matches found for transaction", transaction);
-    continue;
-  }
-  // if (paypalAmountMatches.length > 1) {
-  //   console.log({id: transaction.id, date: transaction.date, amount: amount}, paypalAmountMatches)
-  // }
+  const match = (() => {
+    const paypalAmountMatches = paypalAmounts
+      .get(amount)
+      ?.filter((pp) => !paypalMatches.has(pp.L_TRANSACTIONID));
 
-  const matchDates = paypalAmountMatches.map((pp) => pp.L_TIMESTAMP);
-  const closestIndex = closestIndexTo(date, matchDates);
-  if (closestIndex === undefined) {
-    continue;
-  }
+    if (paypalAmountMatches && paypalAmountMatches.length > 0) {
+      const matchDates = paypalAmountMatches.map((pp) => pp.L_TIMESTAMP);
+      const closestIndex = closestIndexTo(date, matchDates);
 
-  const closestMatch = paypalAmountMatches.at(closestIndex)!;
-  if (differenceInDays(date, closestMatch.L_TIMESTAMP) > 3) {
-    console.warn(
-      `Amount match found, but too far away`,
-      transaction,
-      closestMatch,
+      if (closestIndex !== undefined) {
+        const closestAmountMatch = paypalAmountMatches.at(closestIndex)!;
+        if (differenceInDays(date, closestAmountMatch.L_TIMESTAMP) <= 3) {
+          return closestAmountMatch;
+        }
+      }
+    }
+
+    const dateRange = interval(
+      subDays(date, DAY_BUFFER),
+      addDays(date, DAY_BUFFER),
     );
-    continue;
+    const paypalDateRangeMatches = [...paypalDates.keys()]
+      .filter((dateStr) => isWithinInterval(new Date(dateStr), dateRange))
+      .flatMap((dateStr) =>
+        paypalDates
+          .get(dateStr)!
+          .filter((pp) => !paypalMatches.has(pp.L_TRANSACTIONID)),
+      );
+
+    if (paypalDateRangeMatches && paypalDateRangeMatches.length > 0) {
+      const intlMatches = paypalDateRangeMatches
+        .filter((pp) => pp.L_CURRENCYCODE !== "USD")
+        .map((pp) => {
+          const exchangeRate = getCachedHistoricalExchangeRate(
+            pp.L_TIMESTAMP,
+            pp.L_CURRENCYCODE,
+          );
+          return {
+            amount: parseFloat(pp.L_AMT) / exchangeRate,
+            paypalTransaction: pp,
+          };
+        });
+
+      if (intlMatches.length > 0) {
+        const closest = intlMatches.reduce((acc, obj) =>
+          Math.abs(amount - obj.amount) < Math.abs(amount - acc.amount)
+            ? obj
+            : acc,
+        );
+        const diff = Math.abs(amount - closest.amount);
+        if (diff < 0.3) {
+          return closest.paypalTransaction;
+        } else if (diff <= 1) {
+          maybeMatches.set(transaction.id, closest);
+        }
+      }
+    }
+
+    console.warn("No matches found for transaction", transaction);
+    return;
+  })();
+
+  if (match) {
+    // Remove match from availble options
+    paypalMatches.add(match.L_TRANSACTIONID);
+
+    updates.set(transaction.id, {
+      id: transaction.id,
+      payee: match.L_NAME,
+      matchDate: match.L_TIMESTAMP,
+    });
   }
+}
 
-  // Remove match from availble options
-  paypalAmounts.set(
-    amount,
-    paypalAmountMatches.filter(
-      (pp) => pp.L_TRANSACTIONID !== closestMatch.L_TRANSACTIONID,
-    ),
-  );
-
-  updates.set(transaction.id, {
-    id: transaction.id,
-    payee: closestMatch.L_NAME,
-    matchDate: closestMatch.L_TIMESTAMP,
+function updatesTable() {
+  const table = new Table({
+    head: ["id", "date", "amount", "update", "payee", "matchDate"],
   });
+  for (const transaction of transactions) {
+    const update = updates.get(transaction.id);
+    const row = {
+      id: transaction.id,
+      date: transaction.date,
+      amount: parseFloat(transaction.amount),
+      update: update ? "✅" : "❌",
+      payee: update?.payee ?? "",
+      matchDate: update
+        ? formatISO(update.matchDate, { representation: "date" })
+        : null,
+    };
+
+    table.push(Object.values(row));
+  }
+  return table.toString();
 }
 
-// console.log("unmatched paypal transactions", paypalAmounts);
+console.log(updatesTable());
 
-const table = new Table({
-  head: ["id", "date", "amount", "update", "payee", "matchDate"],
-});
-for (const transaction of transactions) {
-  const update = updates.get(transaction.id);
-  const row = {
-    id: transaction.id,
-    date: transaction.date,
-    amount: parseFloat(transaction.amount),
-    update: update ? "✅" : "❌",
-    payee: update?.payee ?? "",
-    matchDate: update
-      ? formatISO(update.matchDate, { representation: "date" })
-      : null,
-  };
+async function handleUnmatched() {
+  if (transactions.every((transaction) => !updates.has(transaction.id))) return;
 
-  table.push(Object.values(row));
+  if (maybeMatches.size > 0) {
+    const viewMaybes = await confirm({ message: "View potential matches?" });
+    if (!viewMaybes) return;
+
+    for (const transactionId of maybeMatches.keys()) {
+      const transaction = transactions.find((t) => t.id === transactionId)!;
+      const { amount: matchAmount, paypalTransaction } =
+        maybeMatches.get(transactionId)!;
+      const amount = parseFloat(transaction.amount);
+      const table = new Table();
+      table.push({
+        "Transaction date": transaction.date,
+        "Transaction amount": amount,
+        "Match date": formatISO(paypalTransaction.L_TIMESTAMP, {
+          representation: "date",
+        }),
+        "Match amount": `${matchAmount} (${paypalTransaction.L_AMT} ${paypalTransaction.L_CURRENCYCODE})`,
+        "Match name": paypalTransaction.L_NAME,
+      });
+      // TODO confirm, push to updates
+    }
+
+    // console.log(updatesTable());
+  } else {
+    console.log("No potential matches found");
+    const viewUnmatched = await confirm({
+      message: "View all unmatched Paypal transactions?",
+    });
+    if (!viewUnmatched) return;
+
+    console.log(
+      paypalTransactions.filter((pp) => !paypalMatches.has(pp.L_TRANSACTIONID)),
+    );
+  }
 }
-console.log(table.toString());
+await handleUnmatched();
 
-const answer = await confirm({ message: "Update transactions?" });
-
-if (!answer) {
+const shouldUpdate = await confirm({ message: "Update transactions?" });
+if (!shouldUpdate) {
   process.exit(0);
 }
 

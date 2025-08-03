@@ -1,12 +1,13 @@
-import { formatISO, subYears } from "date-fns";
+import { formatISO } from "date-fns";
+import { env } from "./util.mjs";
 
 const API_BASE = "https://dev.lunchmoney.app";
-const ACCESS_TOKEN = process.env.LUNCHMONEY_ACCESS_TOKEN;
+const ACCESS_TOKEN = env("LUNCHMONEY_ACCESS_TOKEN");
 
 export declare enum TransactionStatus {
   CLEARED = "cleared",
   UNCLEARED = "uncleared",
-  PENDING = "pending"
+  PENDING = "pending",
 }
 export interface Transaction {
   id: number;
@@ -33,10 +34,9 @@ export interface Transaction {
   updated_at: Date;
 }
 
-export interface UpdateTransaction extends 
-  Pick<Transaction, "id">, 
-  Partial<Pick<Transaction, "payee" | "notes" | "status" | "category_id">> 
-{
+export interface UpdateTransaction
+  extends Pick<Transaction, "id">,
+    Partial<Pick<Transaction, "payee" | "notes" | "status" | "category_id">> {
   tags: string[] | number[] | null;
 }
 
@@ -45,18 +45,24 @@ export interface Tag {
   name: string;
 }
 
-export async function getLunchMoneyTransactions(startDate: Date, endDate: Date) {
+export async function getLunchMoneyTransactions(
+  startDate: Date,
+  endDate: Date,
+) {
   const options = new URLSearchParams({
     debit_as_negative: "true",
     status: "uncleared",
     start_date: formatISO(startDate, { representation: "date" }),
     end_date: formatISO(endDate, { representation: "date" }),
   });
-  const response = await fetch(`${API_BASE}/v1/transactions?${options.toString()}`, {
-    headers: {
-      "Authorization": `Bearer ${ACCESS_TOKEN}`
-    }
-  });
+  const response = await fetch(
+    `${API_BASE}/v1/transactions?${options.toString()}`,
+    {
+      headers: {
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+      },
+    },
+  );
 
   if (!response.ok) {
     throw new Error(await response.text());
@@ -72,25 +78,30 @@ export async function getLunchMoneyTransactions(startDate: Date, endDate: Date) 
   return data.transactions as Transaction[];
 }
 
-export async function updateLunchMoneyTransaction(transaction: UpdateTransaction) {
-  const response = await fetch(`${API_BASE}/v1/transactions/${transaction.id}`, {
-    method: "PUT",
-    body: JSON.stringify({
-      debit_as_negative: true,
-      transaction
-    }),
-    headers: {
-      "Authorization": `Bearer ${ACCESS_TOKEN}`,
-      "Content-Type": "application/json"
-    }
-  });
+export async function updateLunchMoneyTransaction(
+  transaction: UpdateTransaction,
+) {
+  const response = await fetch(
+    `${API_BASE}/v1/transactions/${transaction.id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        debit_as_negative: true,
+        transaction,
+      }),
+      headers: {
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    },
+  );
 
   if (!response.ok) {
     throw new Error(await response.text());
   }
 
   const data = await response.json();
-  return data as {updated: boolean};
+  return data as { updated: boolean };
 }
 
 function jsonDateReviver(_key: string, value: JSONSerializable) {

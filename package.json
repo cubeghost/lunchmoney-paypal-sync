@@ -11,6 +11,7 @@
     "cli-table3": "^0.6.5",
     "date-fns": "^4.1.0",
     "dotenv": "^17.1.0",
+    "flat-cache": "^6.1.12",
     "nvp-json": "^1.1.2"
   },
   "devDependencies": {

@@ -1,11 +1,12 @@
 import nvp from "nvp-json";
+import { env } from "../util.mjs";
 
 export const NVP_ENDPOINT = "https://api-3t.paypal.com/nvp";
 
 export const NVP_CREDENTIALS = {
-  USER: process.env.NVP_USERNAME!,
-  PWD: process.env.NVP_PASSWORD!,
-  SIGNATURE: process.env.NVP_SIGNATURE!,
+  USER: env("NVP_USERNAME"),
+  PWD: env("NVP_PASSWORD"),
+  SIGNATURE: env("NVP_SIGNATURE"),
   VERSION: "200",
 };
 
